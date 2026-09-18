@@ -1,0 +1,714 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; base-uri 'none'; form-action 'none'">
+<meta name="description" content="离线单文件 GitHub 2FA 验证码生成器。密钥不出浏览器，断网可用，专治国内装不上 Google Authenticator 的问题。">
+<title>GitHub 2FA 验证码 · 离线单文件</title>
+<style>
+*,*::before,*::after{box-sizing:border-box}
+:root{
+  --bg:#f5f6f8; --card:#ffffff; --fg:#16181d; --muted:#6b7280;
+  --border:#e3e6ea; --surface:#f2f4f7; --accent:#2563eb; --danger:#dc2626;
+  --ok:#15803d; --warn:#b45309;
+}
+@media (prefers-color-scheme:dark){
+  :root{
+    --bg:#0d0f13; --card:#161a20; --fg:#e7e9ec; --muted:#98a0ab;
+    --border:#262c35; --surface:#1c2128; --accent:#5b9dff; --danger:#f87171;
+    --ok:#4ade80; --warn:#fbbf24;
+  }
+}
+html,body{margin:0;padding:0}
+body{
+  background:var(--bg); color:var(--fg);
+  font-family:system-ui,-apple-system,"Segoe UI","Microsoft YaHei",sans-serif;
+  font-size:15px; line-height:1.7; padding:32px 16px 72px;
+  -webkit-font-smoothing:antialiased;
+}
+.wrap{max-width:620px;margin:0 auto}
+.mono{font-family:ui-monospace,"SF Mono",Consolas,"Cascadia Mono","Liberation Mono",monospace}
+
+/* ---------- 顶部 ---------- */
+header{margin-bottom:22px}
+h1{font-size:21px;margin:0 0 6px;font-weight:650;letter-spacing:-0.01em}
+.sub{margin:0;color:var(--muted);font-size:13.5px}
+.badge{
+  display:inline-flex;align-items:center;gap:5px;margin-top:10px;
+  font-size:12px;color:var(--ok);background:var(--surface);
+  border:1px solid var(--border);border-radius:99px;padding:3px 10px;
+}
+.badge::before{content:"";width:6px;height:6px;border-radius:50%;background:currentColor}
+
+/* ---------- 卡片 ---------- */
+.card{
+  background:var(--card);border:1px solid var(--border);border-radius:12px;
+  padding:18px;margin-bottom:14px;
+}
+.card > :first-child{margin-top:0}
+.card > :last-child{margin-bottom:0}
+
+label{display:block;font-size:13px;font-weight:600;margin-bottom:8px;color:var(--fg)}
+label .hint{font-weight:400;color:var(--muted)}
+
+textarea{
+  width:100%;min-height:76px;resize:vertical;
+  background:var(--surface);color:var(--fg);
+  border:1px solid var(--border);border-radius:8px;
+  padding:11px 12px;font-size:13.5px;line-height:1.6;
+  font-family:ui-monospace,"SF Mono",Consolas,"Cascadia Mono",monospace;
+  word-break:break-all;
+}
+textarea:focus{outline:2px solid var(--accent);outline-offset:-1px;border-color:transparent}
+textarea::placeholder{color:var(--muted);opacity:.75}
+
+.msg{margin-top:10px;font-size:13px;display:none}
+.msg.on{display:block}
+.msg.err{color:var(--danger)}
+.msg.warn{color:var(--warn)}
+
+/* ---------- 元信息 ---------- */
+.meta{
+  display:none;margin-top:12px;padding-top:12px;
+  border-top:1px solid var(--border);font-size:13px;gap:4px 18px;
+  flex-wrap:wrap;
+}
+.meta.on{display:flex}
+.meta span{color:var(--muted)}
+.meta b{color:var(--fg);font-weight:600}
+
+/* ---------- 输出 ---------- */
+.out{display:flex;align-items:center;gap:22px}
+.code{
+  flex:1;font-size:54px;font-size:clamp(38px,11vw,54px);font-weight:600;
+  letter-spacing:.045em;line-height:1.1;
+  font-family:ui-monospace,"SF Mono",Consolas,"Cascadia Mono",monospace;
+  font-variant-numeric:tabular-nums;user-select:all;
+}
+/* 验证码分两半的间隙用 CSS 做，不往文本里塞空格，
+   这样手动选中复制拿到的是纯数字 */
+.code span + span{margin-left:.3em}
+.code.dim{color:var(--muted);opacity:.35}
+.ring-wrap{position:relative;flex:none;width:52px;height:52px}
+.ring{display:block;width:100%;height:100%;transform:rotate(-90deg)}
+.ring circle{fill:none;stroke-width:4}
+.ring .bg{stroke:var(--border)}
+.ring .fg{stroke:var(--accent);transition:stroke-dasharray .25s linear}
+.ring-wrap .sec{
+  position:absolute;inset:0;display:flex;align-items:center;justify-content:center;
+  font-size:13px;font-weight:600;font-variant-numeric:tabular-nums;color:var(--muted);
+}
+.row{display:flex;gap:9px;margin-top:16px}
+button{
+  font:inherit;font-size:13.5px;font-weight:550;
+  padding:9px 15px;border-radius:8px;cursor:pointer;
+  border:1px solid var(--border);background:var(--surface);color:var(--fg);
+  transition:opacity .12s;
+}
+button:hover:not(:disabled){opacity:.78}
+button:disabled{opacity:.4;cursor:default}
+button.primary{background:var(--accent);border-color:var(--accent);color:#fff;min-width:152px}
+
+/* ---------- 引导 ---------- */
+details{border:1px solid var(--border);border-radius:12px;background:var(--card);margin-bottom:10px;overflow:hidden}
+summary{
+  cursor:pointer;padding:14px 18px;font-size:14px;font-weight:600;
+  list-style:none;display:flex;justify-content:space-between;align-items:center;
+}
+summary::-webkit-details-marker{display:none}
+summary::after{content:"＋";color:var(--muted);font-weight:400;font-size:15px}
+details[open] summary::after{content:"－"}
+details[open] summary{border-bottom:1px solid var(--border)}
+.body{padding:4px 18px 16px;font-size:13.5px;color:var(--fg)}
+.body ol,.body ul{padding-left:19px;margin:10px 0}
+.body li{margin:6px 0}
+.body p{margin:10px 0}
+.body code{
+  background:var(--surface);border:1px solid var(--border);border-radius:5px;
+  padding:1px 5px;font-size:12.5px;
+  font-family:ui-monospace,"SF Mono",Consolas,"Cascadia Mono",monospace;
+}
+.body .key{color:var(--accent);font-weight:600}
+.body .alert{color:var(--danger);font-weight:600}
+footer{text-align:center;color:var(--muted);font-size:12.5px;margin-top:26px}
+footer a{color:inherit}
+@media (max-width:480px){
+  .out{gap:16px}
+  .code{font-size:clamp(34px,13vw,44px)}
+  .ring,.ring-wrap{width:44px;height:44px}
+}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header>
+  <h1>GitHub 2FA 验证码</h1>
+  <p class="sub">离线单文件 · 密钥不出浏览器 · 断网可用</p>
+  <div class="badge">此页面无法联网（CSP 已锁死）</div>
+</header>
+
+<div class="card">
+  <label for="secret">
+    粘贴 GitHub 给的密钥
+    <span class="hint">— Base32 文本，或 otpauth:// 链接</span>
+  </label>
+  <textarea id="secret" spellcheck="false" autocomplete="off" autocapitalize="off"
+    placeholder="JBSWY3DPEHPK3PXP"></textarea>
+  <div id="msg" class="msg"></div>
+  <div id="meta" class="meta"></div>
+</div>
+
+<div class="card">
+  <div class="out">
+    <div class="code dim" id="code"><span id="codeA">—</span><span id="codeB">—</span></div>
+    <div class="ring-wrap">
+      <svg class="ring" viewBox="0 0 36 36" aria-hidden="true">
+        <circle class="bg" cx="18" cy="18" r="15.9155"></circle>
+        <circle class="fg" id="ring" cx="18" cy="18" r="15.9155"
+                stroke-dasharray="100 100"></circle>
+      </svg>
+      <div class="sec" id="sec"></div>
+    </div>
+  </div>
+  <div class="row">
+    <button class="primary" id="copy" disabled>复制验证码</button>
+    <button id="clear">清空</button>
+  </div>
+</div>
+
+<details>
+  <summary>密钥在哪找</summary>
+  <div class="body">
+    <ol>
+      <li>登录 GitHub，进 <code>Settings</code> → <code>Password and authentication</code>。</li>
+      <li>找到 <code>Two-factor authentication</code>，点 <code>Enable</code>，选 <code>Authenticator app</code>。</li>
+      <li>页面会显示一个二维码。二维码<b>下方</b>有一行小字
+          <code>enter this text code instead</code>，点开它。</li>
+      <li>里面会露出一串 <span class="key">32 位大写字母和数字</span>，形如
+          <code>JBSWY3DPEHPK3PXP...</code>。这正是需要的密钥，复制它。</li>
+      <li>粘到上面的输入框，这里就会开始出码。回到 GitHub 把那 6 位数填进去，
+          完成绑定。</li>
+    </ol>
+    <p>如果用的是手机浏览器又没法复制，可以先把那页截图，回头在电脑上照着敲。
+       敲完留意下面显示的密钥长度：GitHub 固定 32 个字符，对不上就是敲错了。</p>
+  </div>
+</details>
+
+<details>
+  <summary>为什么不能直接扫码</summary>
+  <div class="body">
+    <p>GitHub 的二维码里装的是一个 <code>otpauth://</code> 链接，需要手机上有一个
+       验证器应用来接管它。</p>
+    <p>国内安卓的麻烦在于：Google 服务不可用，Google Authenticator 装不上；
+       相机或扫码工具识别出这个链接之后，找不到能处理它的应用，于是没有任何反应。</p>
+    <p>这台页面绕开这一步——不用扫码，直接吃那串文本密钥。</p>
+  </div>
+</details>
+
+<details>
+  <summary><span class="alert">恢复码一定要存</span></summary>
+  <div class="body">
+    <p>设置 2FA 的最后一步，GitHub 会给出 <b>16 个恢复码</b>。这是整件事里最容易被
+       忽略、也最要命的一步。</p>
+    <p>手机丢了、系统重装、密钥没备份——这时唯一能把账号救回来的东西就是它。
+       没有恢复码，只能走 GitHub 支持工单人工申诉，国内用户在这条路上成功率很低，
+       折腾几周也可能拿不回来。</p>
+    <ul>
+      <li>存进密码管理器（Bitwarden、1Password 都行）</li>
+      <li>或者打印出来、抄到纸上，和重要证件放一起</li>
+      <li>别只存在那台要装验证器的手机里</li>
+    </ul>
+  </div>
+</details>
+
+<details>
+  <summary>这东西能长期用吗</summary>
+  <div class="body">
+    <p>不能。它只解决"设置这一步走不过去"的问题。</p>
+    <p>密钥只存在浏览器内存里，<b>关掉页面或刷新就没了</b>，这是刻意的设计——
+       网页不该成为你账号的长期钥匙保管人。所以它是应急和过渡用的。</p>
+    <p>设置完成后，长期方案是落到一个真正的验证器上：</p>
+    <ul>
+      <li>安卓：<b>Aegis</b> 或 <b>FreeOTP</b>，可以从 F-Droid 或项目的 GitHub Releases
+          直接下 APK，不需要 Google Play</li>
+      <li>iOS：App Store 里的任意验证器，包括微软 Authenticator，这条路没有障碍</li>
+      <li>电脑：<b>KeePassXC</b>、<b>WinAuth</b></li>
+      <li>密码管理器：Bitwarden、1Password、KeePassXC 都自带 TOTP，可以把密钥和密码存一起</li>
+    </ul>
+    <p>把同一串密钥填进那些应用，就能长期出码。同一密钥可以同时存在于多处，
+       互不影响。</p>
+  </div>
+</details>
+
+<details>
+  <summary>安全性说明</summary>
+  <div class="body">
+    <ul>
+      <li>页面不发起任何网络请求。顶部的 CSP 策略是
+          <code>default-src 'none'</code>，浏览器层面禁掉了全部外部资源，
+          你可以按 F12 在控制台确认。</li>
+      <li>验证码在本地算出来，密钥和计算过程都不会离开这台机器。</li>
+      <li>计算用的是自己实现的 SHA-1 和 HMAC，没有依赖
+          <code>crypto.subtle</code>——那个 API 在
+          <code>file://</code> 和部分国产内置浏览器里不可靠。</li>
+      <li>建议断网之后再粘贴密钥，彻底排除顾虑。</li>
+      <li>更谨慎的话，把这份 <code>index.html</code> 存到本地，双击打开，
+          连服务器都不经过。</li>
+      <li>页面上会显示本机时间。验证码依赖本机时钟，时间偏了所有码都会错
+          而且没有任何提示，露出时间是为了让你有机会自己发现。</li>
+    </ul>
+  </div>
+</details>
+
+<footer>
+  纯静态单文件 · 无后端 · 无追踪 · 可自行审计
+</footer>
+
+</div>
+
+<script id="core">
+/* ===CORE-START=== */
+"use strict";
+
+/* ============================================================
+ * 步骤 1：SHA-1
+ *
+ * 目标：用纯 JS 实现，不用 crypto.subtle
+ * 原因：crypto.subtle 只在安全上下文可用，file:// 协议和部分
+ *       国产内置浏览器的判定不一致，会直接让工具失效
+ * 输入：Uint8Array    输出：20 字节 Uint8Array
+ * ============================================================ */
+function sha1(bytes) {
+  // 1.1 填充。补 0x80，再补 0 到 56 mod 64，末尾 8 字节写原始比特长度（大端）
+  var len = bytes.length;
+  var total = (((len + 8) >> 6) << 6) + 64;
+  var buf = new Uint8Array(total);
+  buf.set(bytes);
+  buf[len] = 0x80;
+  var view = new DataView(buf.buffer);
+  var bits = len * 8;
+  view.setUint32(total - 8, Math.floor(bits / 4294967296));
+  view.setUint32(total - 4, bits >>> 0);
+
+  // 1.2 初始状态
+  var h0 = 0x67452301, h1 = 0xEFCDAB89, h2 = 0x98BADCFE,
+      h3 = 0x10325476, h4 = 0xC3D2E1F0;
+  var w = new Uint32Array(80);
+
+  // 1.3 逐块处理
+  for (var i = 0; i < total; i += 64) {
+    for (var j = 0; j < 16; j++) w[j] = view.getUint32(i + j * 4);
+    for (j = 16; j < 80; j++) {
+      var x = w[j - 3] ^ w[j - 8] ^ w[j - 14] ^ w[j - 16];
+      w[j] = (x << 1) | (x >>> 31);
+    }
+    var a = h0, b = h1, c = h2, d = h3, e = h4;
+    for (j = 0; j < 80; j++) {
+      var f, k;
+      if (j < 20)      { f = (b & c) | (~b & d);            k = 0x5A827999; }
+      else if (j < 40) { f = b ^ c ^ d;                     k = 0x6ED9EBA1; }
+      else if (j < 60) { f = (b & c) | (b & d) | (c & d);   k = 0x8F1BBCDC; }
+      else             { f = b ^ c ^ d;                     k = 0xCA62C1D6; }
+      // 1.4 轮函数：左旋 5 位的 a，累加后截断到 32 位
+      var t = ((((a << 5) | (a >>> 27)) + f + e + k + w[j]) >>> 0);
+      e = d; d = c; c = (b << 30) | (b >>> 2); b = a; a = t;
+    }
+    h0 = (h0 + a) >>> 0; h1 = (h1 + b) >>> 0; h2 = (h2 + c) >>> 0;
+    h3 = (h3 + d) >>> 0; h4 = (h4 + e) >>> 0;
+  }
+
+  // 1.5 输出 20 字节摘要
+  var out = new Uint8Array(20);
+  var ov = new DataView(out.buffer);
+  ov.setUint32(0, h0); ov.setUint32(4, h1); ov.setUint32(8, h2);
+  ov.setUint32(12, h3); ov.setUint32(16, h4);
+  return out;
+}
+
+/* ============================================================
+ * 步骤 2：HMAC-SHA1（RFC 2104）
+ *
+ * 目标：用 SHA-1 构造带密钥的消息认证码
+ * 要点：
+ *   1) 密钥超过 64 字节要先哈希
+ *   2) 否则右侧补零到 64 字节
+ *   3) 内层异或 0x36，外层异或 0x5c
+ * ============================================================ */
+function hmacSha1(key, msg) {
+  // 2.1 规整密钥到 64 字节
+  var k = key.length > 64 ? sha1(key) : key;
+  var pad = new Uint8Array(64);
+  pad.set(k);
+
+  // 2.2 拼内层：ipad || msg
+  var inner = new Uint8Array(64 + msg.length);
+  for (var i = 0; i < 64; i++) inner[i] = pad[i] ^ 0x36;
+  inner.set(msg, 64);
+
+  // 2.3 拼外层：opad || sha1(内层)
+  var outer = new Uint8Array(64 + 20);
+  for (i = 0; i < 64; i++) outer[i] = pad[i] ^ 0x5c;
+  outer.set(sha1(inner), 64);
+
+  return sha1(outer);
+}
+
+/* ============================================================
+ * 步骤 3：Base32 解码（RFC 4648）
+ *
+ * 目标：把 GitHub 给的密钥文本转成字节
+ * 要点：
+ *   1) 容忍空格、连字符、小写、结尾的等号
+ *   2) 每 5 位拼一个字符，攒够 8 位吐一个字节
+ *   3) 非法字符直接报错，不静默忽略
+ * ============================================================ */
+var B32 = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
+
+function base32Decode(input) {
+  // 3.1 清理输入
+  var s = String(input).toUpperCase().replace(/[\s\-=]/g, "");
+  if (!s) throw new Error("密钥是空的");
+
+  // 3.2 逐字符累积比特
+  var out = [];
+  var acc = 0, bits = 0;
+  for (var i = 0; i < s.length; i++) {
+    var idx = B32.indexOf(s.charAt(i));
+    if (idx === -1) {
+      throw new Error("密钥里有非法字符 “" + s.charAt(i) + "”，Base32 只允许 A-Z 和 2-7");
+    }
+    acc = (acc << 5) | idx;
+    bits += 5;
+    if (bits >= 8) {
+      bits -= 8;
+      out.push((acc >>> bits) & 0xff);
+    }
+  }
+
+  if (out.length === 0) throw new Error("密钥太短，解不出内容");
+  return new Uint8Array(out);
+}
+
+/* ============================================================
+ * 步骤 4：TOTP（RFC 6238）
+ *
+ * 目标：由密钥和当前时间算出一次性验证码
+ * 要点：
+ *   1) 时间轴按周期切片，切成计数器
+ *   2) 计数器写成 8 字节大端，喂给 HMAC
+ *   3) 用摘要最后一字节的低 4 位做偏移，取 4 字节
+ *   4) 抹掉最高位，对 10^位数 取模
+ * ============================================================ */
+function totp(keyBytes, timestampMs, period, digits) {
+  // 4.1 算计数器
+  var counter = Math.floor(timestampMs / 1000 / period);
+  var msg = new Uint8Array(8);
+  var view = new DataView(msg.buffer);
+  view.setUint32(0, Math.floor(counter / 4294967296));
+  view.setUint32(4, counter >>> 0);
+
+  // 4.2 动态截断
+  var mac = hmacSha1(keyBytes, msg);
+  var off = mac[mac.length - 1] & 0x0f;
+  var bin = ((mac[off] & 0x7f) << 24) | (mac[off + 1] << 16) |
+            (mac[off + 2] << 8) | mac[off + 3];
+
+  // 4.3 取模补零
+  var mod = Math.pow(10, digits);
+  var code = String(bin % mod);
+  while (code.length < digits) code = "0" + code;
+  return code;
+}
+
+/* ============================================================
+ * 步骤 5：解析用户输入
+ *
+ * 目标：同时接受裸 Base32 密钥和 otpauth:// 链接
+ * 输入：
+ *   "JBSWY3DPEHPK3PXP"
+ *   "otpauth://totp/GitHub:someone?secret=XXX&issuer=GitHub"
+ * 输出：{ key, digits, period, issuer, account, algorithmOk,
+ *        algorithm, secretChars, paramsOk }
+ * ============================================================ */
+function safeDecode(v) {
+  try { return decodeURIComponent(v); } catch (e) { return v; }
+}
+
+function parseOtpauthInput(raw) {
+  var s = String(raw).trim();
+  if (!s) throw new Error("密钥是空的");
+
+  // 5.1 裸密钥，直接解码
+  if (!/^otpauth:\/\//i.test(s)) {
+    return { key: base32Decode(s), digits: 6, period: 30,
+             issuer: "", account: "", algorithmOk: true,
+             secretChars: s.replace(/[\s\-=]/g, "").length, paramsOk: true };
+  }
+
+  // 5.2 链接形式，手工拆，不用 URL 构造函数（非特殊协议支持不一致）
+  var rest = s.slice(10);
+  var q = rest.indexOf("?");
+  var head = q === -1 ? rest : rest.slice(0, q);
+  var query = q === -1 ? "" : rest.slice(q + 1);
+
+  var slash = head.indexOf("/");
+  var type = (slash === -1 ? head : head.slice(0, slash)).toLowerCase();
+  var label = slash === -1 ? "" : head.slice(slash + 1);
+
+  if (type && type !== "totp") {
+    throw new Error("这是 " + type.toUpperCase() + " 类型，本工具只支持 TOTP");
+  }
+
+  // 5.3 解析查询参数
+  var params = {};
+  var pairs = query.split("&");
+  for (var i = 0; i < pairs.length; i++) {
+    if (!pairs[i]) continue;
+    var eq = pairs[i].indexOf("=");
+    var k = (eq === -1 ? pairs[i] : pairs[i].slice(0, eq)).toLowerCase();
+    var v = eq === -1 ? "" : pairs[i].slice(eq + 1);
+    params[k] = safeDecode(v);
+  }
+
+  if (!params.secret) throw new Error("链接里没有 secret 参数");
+
+  // 5.4 从 label 里拆出发行方和账号，形如 "GitHub:someone"
+  var issuer = params.issuer || "";
+  var account = label;
+  var colon = label.indexOf(":");
+  if (colon !== -1) {
+    if (!issuer) issuer = safeDecode(label.slice(0, colon));
+    account = safeDecode(label.slice(colon + 1));
+  } else {
+    account = safeDecode(label);
+  }
+
+  // 5.5 算法只认 SHA1，其它要显式拦下来，否则会算出看起来正常、
+  //     实际永远不对的验证码。SHA1 和 SHA-1 两种写法都算合法
+  var algo = (params.algorithm || "SHA1").toUpperCase().replace(/-/g, "");
+  var algorithmOk = algo === "SHA1";
+
+  // 5.6 位数和周期越界也要显式报出来。静默换成默认值，等于给出一个
+  //     看着正常、实际永远不对的码，用户还以为在正常工作
+  var paramsOk = true;
+
+  var digits = parseInt(params.digits, 10);
+  if (!(digits >= 6 && digits <= 10)) {
+    if (params.digits !== undefined) paramsOk = false;
+    digits = 6;
+  }
+
+  var period = parseInt(params.period, 10);
+  if (!(period > 0 && period <= 3600)) {
+    if (params.period !== undefined) paramsOk = false;
+    period = 30;
+  }
+
+  return {
+    key: base32Decode(params.secret),
+    digits: digits,
+    period: period,
+    issuer: issuer,
+    account: account,
+    algorithmOk: algorithmOk,
+    algorithm: algo,
+    secretChars: String(params.secret).replace(/[\s\-=]/g, "").length,
+    paramsOk: paramsOk
+  };
+}
+/* ===CORE-END=== */
+</script>
+
+<script>
+(function () {
+  "use strict";
+
+  var $ = function (id) { return document.getElementById(id); };
+  var input = $("secret"), codeEl = $("code"), secEl = $("sec"),
+      ring = $("ring"), msgEl = $("msg"), metaEl = $("meta"),
+      copyBtn = $("copy"), codeA = $("codeA"), codeB = $("codeB");
+
+  var current = null;   // 当前解析结果，空表示没有有效密钥
+
+  /* ---------- 显示 ---------- */
+  // 验证码拆成左右两半，6 位分 3+3，8 位分 4+4，读起来更快。
+  // 空隙由 CSS 的 margin 提供，DOM 里的文本始终是连续的纯数字
+  function showCode(code) {
+    var mid = Math.ceil(code.length / 2);
+    codeA.textContent = code.slice(0, mid);
+    codeB.textContent = code.slice(mid);
+  }
+
+  // 本机时钟偏了，所有码都会错而且毫无征兆，露出来给它一个自查的机会
+  function clockText() {
+    var d = new Date();
+    var p = function (n) { return (n < 10 ? "0" : "") + n; };
+    return p(d.getHours()) + ":" + p(d.getMinutes()) + ":" + p(d.getSeconds());
+  }
+
+  function setMsg(text, kind) {
+    if (!text) { msgEl.className = "msg"; msgEl.textContent = ""; return; }
+    msgEl.className = "msg on " + (kind || "");
+    msgEl.textContent = text;
+  }
+
+  function setMeta(p) {
+    var parts = [];
+    if (p.issuer)  parts.push('<span>发行方</span><b>' + esc(p.issuer) + "</b>");
+    if (p.account) parts.push('<span>账号</span><b>' + esc(p.account) + "</b>");
+    parts.push("<span>位数</span><b>" + p.digits + "</b>");
+    parts.push("<span>周期</span><b>" + p.period + " 秒</b>");
+    // 密钥长度单列出来：手敲掉一个字符照样能出码，但永远是错的，
+    // 摆在这里用户才有机会自己核对
+    parts.push("<span>密钥</span><b>" + p.secretChars + " 字符</b>");
+    parts.push('<span>本机时间</span><b id="clock">' + clockText() + "</b>");
+    metaEl.innerHTML = parts.join("");
+    metaEl.className = "meta on";
+  }
+
+  function esc(s) {
+    return String(s).replace(/[&<>"]/g, function (c) {
+      return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c];
+    });
+  }
+
+  function idle() {
+    current = null;
+    codeA.textContent = "—";
+    codeB.textContent = "—";
+    codeEl.className = "code dim";
+    secEl.textContent = "";
+    ring.setAttribute("stroke-dasharray", "100 100");
+    metaEl.className = "meta";
+    metaEl.innerHTML = "";
+    copyBtn.disabled = true;
+  }
+
+  /* ---------- 核心刷新 ---------- */
+  function refresh() {
+    var raw = input.value;
+    if (!raw.trim()) { idle(); setMsg(""); return; }
+
+    var parsed;
+    try {
+      parsed = parseOtpauthInput(raw);
+    } catch (e) {
+      idle();
+      setMsg(e.message, "err");
+      return;
+    }
+
+    current = parsed;
+    codeEl.className = "code";
+    copyBtn.disabled = false;
+    setMeta(parsed);
+
+    // 算法不是 SHA1 时给出明确警告：码会照常跳动，但永远是错的
+    if (!parsed.algorithmOk) {
+      setMsg("这个密钥用的是 " + parsed.algorithm + "，本工具只实现了 SHA-1。" +
+             "算出来的码是错误的，别拿去验证。", "warn");
+    } else if (!parsed.paramsOk) {
+      setMsg("链接里的位数或周期超出了支持范围，已按 6 位 / 30 秒 处理。" +
+             "如果原服务用的不是这两个值，算出来的码是错的。", "warn");
+    } else {
+      setMsg("");
+    }
+
+    tick();
+  }
+
+  /* ---------- 每帧更新 ---------- */
+  function tick() {
+    if (!current) return;
+    var now = Date.now();
+    var periodMs = current.period * 1000;
+    var remainMs = periodMs - (now % periodMs);
+
+    var code = totp(current.key, now, current.period, current.digits);
+    showCode(code);
+
+    var secs = Math.ceil(remainMs / 1000);
+    secEl.textContent = secs;
+
+    // 环周长归一化成 100，直接当百分比用
+    ring.setAttribute("stroke-dasharray", (remainMs / periodMs * 100).toFixed(2) + " 100");
+
+    var clock = $("clock");
+    if (clock) {
+      var t = clockText();
+      if (clock.textContent !== t) clock.textContent = t;
+    }
+  }
+
+  /* ---------- 复制 ---------- */
+  function legacyCopy(text) {
+    var ta = document.createElement("textarea");
+    ta.value = text;
+    ta.setAttribute("readonly", "");
+    ta.style.position = "fixed";
+    ta.style.top = "-1000px";
+    ta.style.opacity = "0";
+    document.body.appendChild(ta);
+    ta.select();
+    ta.setSelectionRange(0, text.length);
+    var ok = false;
+    try { ok = document.execCommand("copy"); } catch (e) { ok = false; }
+    document.body.removeChild(ta);
+    return ok;
+  }
+
+  // 按钮文案是常量。不能在回调里现读 textContent —— 连点两次时，
+  // 第二次读到的"原文本"已经是第一次那条瞬时提示，还原时会把提示
+  // 永久写死在按钮上
+  var COPY_LABEL = "复制验证码";
+  var copyTimer = null;
+
+  copyBtn.addEventListener("click", function () {
+    if (!current) return;
+    var now = Date.now();
+    var raw = totp(current.key, now, current.period, current.digits);
+    var periodMs = current.period * 1000;
+    var remain = Math.ceil((periodMs - (now % periodMs)) / 1000);
+
+    var feedback = function (ok) {
+      copyBtn.textContent = ok ? "已复制，还剩 " + remain + " 秒" : "复制失败，请手动选中";
+      if (copyTimer) clearTimeout(copyTimer);
+      copyTimer = setTimeout(function () { copyBtn.textContent = COPY_LABEL; }, 1600);
+    };
+
+    // 没有 Promise 的环境（老 WebView、老国产内核）用不了
+    // navigator.clipboard，连 Promise.resolve 那一步都会抛错，
+    // 表现成按钮毫无反应，所以先探测再决定走哪条路
+    if (window.Promise && navigator.clipboard && window.isSecureContext) {
+      navigator.clipboard.writeText(raw).then(
+        function () { feedback(true); },
+        function () { feedback(legacyCopy(raw)); }
+      );
+    } else {
+      feedback(legacyCopy(raw));
+    }
+  });
+
+  $("clear").addEventListener("click", function () {
+    input.value = "";
+    idle();
+    setMsg("");
+    input.focus();
+  });
+
+  input.addEventListener("input", refresh);
+
+  // 定时刷新验证码。页面切到后台时浏览器会节流定时器，
+  // 回到前台补算一次，避免看到已经过期的数字
+  setInterval(tick, 250);
+  document.addEventListener("visibilitychange", function () {
+    if (!document.hidden) tick();
+  });
+
+  idle();
+})();
+</script>
+</body>
+</html>
